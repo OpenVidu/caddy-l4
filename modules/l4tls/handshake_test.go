@@ -24,6 +24,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,6 +229,14 @@ func TestHandshakeTimeoutClearedAfterHandshake(t *testing.T) {
 	}
 	if err := <-clientErr; err != nil {
 		t.Fatalf("client: %v", err)
+	}
+}
+
+func TestProvisionRejectsNegativeHandshakeTimeout(t *testing.T) {
+	h := &Handler{HandshakeTimeout: caddy.Duration(-time.Second)}
+	err := h.Provision(caddy.Context{})
+	if err == nil || !strings.Contains(err.Error(), "handshake_timeout") {
+		t.Fatalf("expected a handshake_timeout error, got %v", err)
 	}
 }
 

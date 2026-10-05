@@ -52,7 +52,8 @@ type Handler struct {
 	// It bounds clients that open a connection but never finish the handshake
 	// (no ClientHello, a partial one, or a stall mid-handshake), which would
 	// otherwise hold the connection open until they close it. By default, it
-	// equals 0 and the handshake has no time limit.
+	// equals 0 and the handshake has no time limit. Negative values are
+	// rejected.
 	HandshakeTimeout caddy.Duration `json:"handshake_timeout,omitempty"`
 
 	ctx    caddy.Context
@@ -69,6 +70,10 @@ func (*Handler) CaddyModule() caddy.ModuleInfo {
 
 // Provision sets up the module.
 func (t *Handler) Provision(ctx caddy.Context) error {
+	if t.HandshakeTimeout < 0 {
+		return fmt.Errorf("handshake_timeout: %s must not be negative", time.Duration(t.HandshakeTimeout))
+	}
+
 	t.ctx = ctx
 	t.logger = ctx.Logger(t)
 
