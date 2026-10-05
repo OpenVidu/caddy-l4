@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -43,12 +44,24 @@ func init() {
 	caddy.RegisterModule(&Handler{})
 }
 
+// defaultHandshakeTimeout bounds how long the TLS handshake may take when
+// handshake_timeout is not set.
+const defaultHandshakeTimeout = 10 * time.Second
+
 // Handler is a connection handler that terminates TLS.
 type Handler struct {
 	ConnectionPolicies caddytls.ConnectionPolicies `json:"connection_policies,omitempty"`
 
-	ctx    caddy.Context
-	logger *zap.Logger
+	// HandshakeTimeout is how long to wait for the TLS handshake to complete.
+	// It bounds clients that open a connection but never finish the handshake
+	// (no ClientHello, a partial one, or a stall mid-handshake), which would
+	// otherwise hold the connection open until they close it. Zero uses the
+	// default of 10s; a negative value disables the timeout.
+	HandshakeTimeout caddy.Duration `json:"handshake_timeout,omitempty"`
+
+	handshakeTimeout time.Duration
+	ctx              caddy.Context
+	logger           *zap.Logger
 }
 
 // CaddyModule returns the Caddy module information.
@@ -63,6 +76,15 @@ func (*Handler) CaddyModule() caddy.ModuleInfo {
 func (t *Handler) Provision(ctx caddy.Context) error {
 	t.ctx = ctx
 	t.logger = ctx.Logger(t)
+
+	switch {
+	case t.HandshakeTimeout == 0:
+		t.handshakeTimeout = defaultHandshakeTimeout
+	case t.HandshakeTimeout < 0:
+		t.handshakeTimeout = 0
+	default:
+		t.handshakeTimeout = time.Duration(t.HandshakeTimeout)
+	}
 
 	// ensure there is at least one policy, which will act as default
 	if len(t.ConnectionPolicies) == 0 {
@@ -95,7 +117,13 @@ func (t *Handler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 	// connection to perform the handshake, and cx might have some
 	// bytes already buffered need to be read first)
 	tlsConn := tls.Server(cx, tlsCfg)
+	if t.handshakeTimeout > 0 {
+		_ = cx.SetDeadline(time.Now().Add(t.handshakeTimeout))
+	}
 	err := tlsConn.Handshake()
+	if t.handshakeTimeout > 0 {
+		_ = cx.SetDeadline(time.Time{})
+	}
 	if err != nil {
 		return err
 	}
@@ -132,6 +160,7 @@ func (t *Handler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 //		connection_policy {
 //			...
 //		}
+//		handshake_timeout <duration>
 //	}
 //	tls
 func (t *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
@@ -142,6 +171,7 @@ func (t *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		return d.ArgErr()
 	}
 
+	var hasHandshakeTimeout bool
 	for nesting := d.Nesting(); d.NextBlock(nesting); {
 		optionName := d.Val()
 		switch optionName {
@@ -151,6 +181,19 @@ func (t *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				return err
 			}
 			t.ConnectionPolicies = append(t.ConnectionPolicies, cp)
+		case "handshake_timeout":
+			if hasHandshakeTimeout {
+				return d.Errf("duplicate %s option '%s'", wrapper, optionName)
+			}
+			if d.CountRemainingArgs() != 1 {
+				return d.ArgErr()
+			}
+			d.NextArg()
+			dur, err := caddy.ParseDuration(d.Val())
+			if err != nil {
+				return d.Errf("parsing %s option '%s' duration: %v", wrapper, optionName, err)
+			}
+			t.HandshakeTimeout, hasHandshakeTimeout = caddy.Duration(dur), true
 		default:
 			return d.ArgErr()
 		}
