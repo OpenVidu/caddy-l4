@@ -44,10 +44,6 @@ func init() {
 	caddy.RegisterModule(&Handler{})
 }
 
-// defaultHandshakeTimeout bounds how long the TLS handshake may take when
-// handshake_timeout is not set.
-const defaultHandshakeTimeout = 10 * time.Second
-
 // Handler is a connection handler that terminates TLS.
 type Handler struct {
 	ConnectionPolicies caddytls.ConnectionPolicies `json:"connection_policies,omitempty"`
@@ -55,13 +51,12 @@ type Handler struct {
 	// HandshakeTimeout is how long to wait for the TLS handshake to complete.
 	// It bounds clients that open a connection but never finish the handshake
 	// (no ClientHello, a partial one, or a stall mid-handshake), which would
-	// otherwise hold the connection open until they close it. Zero uses the
-	// default of 10s; a negative value disables the timeout.
+	// otherwise hold the connection open until they close it. By default, it
+	// equals 0 and the handshake has no time limit.
 	HandshakeTimeout caddy.Duration `json:"handshake_timeout,omitempty"`
 
-	handshakeTimeout time.Duration
-	ctx              caddy.Context
-	logger           *zap.Logger
+	ctx    caddy.Context
+	logger *zap.Logger
 }
 
 // CaddyModule returns the Caddy module information.
@@ -76,15 +71,6 @@ func (*Handler) CaddyModule() caddy.ModuleInfo {
 func (t *Handler) Provision(ctx caddy.Context) error {
 	t.ctx = ctx
 	t.logger = ctx.Logger(t)
-
-	switch {
-	case t.HandshakeTimeout == 0:
-		t.handshakeTimeout = defaultHandshakeTimeout
-	case t.HandshakeTimeout < 0:
-		t.handshakeTimeout = 0
-	default:
-		t.handshakeTimeout = time.Duration(t.HandshakeTimeout)
-	}
 
 	// ensure there is at least one policy, which will act as default
 	if len(t.ConnectionPolicies) == 0 {
@@ -117,11 +103,12 @@ func (t *Handler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 	// connection to perform the handshake, and cx might have some
 	// bytes already buffered need to be read first)
 	tlsConn := tls.Server(cx, tlsCfg)
-	if t.handshakeTimeout > 0 {
-		_ = cx.SetDeadline(time.Now().Add(t.handshakeTimeout))
+	handshakeTimeout := time.Duration(t.HandshakeTimeout)
+	if handshakeTimeout > 0 {
+		_ = cx.SetDeadline(time.Now().Add(handshakeTimeout))
 	}
 	err := tlsConn.Handshake()
-	if t.handshakeTimeout > 0 {
+	if handshakeTimeout > 0 {
 		_ = cx.SetDeadline(time.Time{})
 	}
 	if err != nil {

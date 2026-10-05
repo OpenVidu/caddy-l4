@@ -61,7 +61,7 @@ func newTestHandler(t *testing.T, handshakeTimeout time.Duration) *Handler {
 	cfg := &tls.Config{Certificates: []tls.Certificate{selfSignedCert(t)}}
 	return &Handler{
 		ConnectionPolicies: caddytls.ConnectionPolicies{{TLSConfig: cfg}},
-		handshakeTimeout:   handshakeTimeout,
+		HandshakeTimeout:   caddy.Duration(handshakeTimeout),
 		ctx:                caddy.Context{Context: context.Background()},
 		logger:             zap.NewNop(),
 	}
@@ -171,9 +171,10 @@ func TestHandshakeTimeoutStalledClients(t *testing.T) {
 	}
 }
 
-// TestHandshakeTimeoutDisabled: without a handshake timeout, a client that
-// sends nothing keeps Handle waiting until it closes the connection.
-func TestHandshakeTimeoutDisabled(t *testing.T) {
+// TestHandshakeWaitsByDefault documents the default: without a handshake
+// timeout, a client that sends nothing keeps Handle waiting until it closes the
+// connection.
+func TestHandshakeWaitsByDefault(t *testing.T) {
 	h := newTestHandler(t, 0)
 	c, cx := tcpDownstream(t)
 
